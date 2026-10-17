@@ -1347,10 +1347,10 @@ index 0000000..df82147
 +}
 diff --git a/dm/ios/tests/test_ios18_port.py b/dm/ios/tests/test_ios18_port.py
 new file mode 100644
-index 0000000..d954012
+index 0000000..cf3b8e5
 --- /dev/null
 +++ b/dm/ios/tests/test_ios18_port.py
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,110 @@
 +"""No game assets required. These checks do not compile or execute Metal."""
 +import importlib.util
 +from pathlib import Path
@@ -1420,7 +1420,7 @@ index 0000000..d954012
 +    return re.sub(r'^\s*#\s*(?:include|import)\s+(?:"([^"]+)"|<[^>]+>)[^\n]*', replace, path.read_text(), flags=re.M)
 +
 +
-+@unittest.skipUnless(shutil.which('cpp'), 'C preprocessor unavailable')
++@unittest.skipUnless(shutil.which('cc'), 'C preprocessor unavailable')
 +class BranchTests(unittest.TestCase):
 +    def test_no_metal4_api_in_legacy_branch(self):
 +        files = ['dm/gfx/nvn/nvn_mtl.m', 'dm/gfx/tex/nvn_deswizzle_gpu.m']
@@ -1428,10 +1428,12 @@ index 0000000..d954012
 +        for ios, simulator in [(1, 0), (1, 1), (0, 0)]:
 +            for name in files:
 +                with self.subTest(ios=ios, simulator=simulator, file=name):
-+                    result = subprocess.run(['cpp', '-P', '-x', 'c', '-DDM_NVN_M3=1',
++                    completed = subprocess.run(['cc', '-E', '-P', '-x', 'c', '-DDM_NVN_M3=1',
 +                        f'-DTARGET_OS_IPHONE={ios}', f'-DTARGET_OS_OSX={1-ios}',
 +                        f'-DTARGET_OS_SIMULATOR={simulator}', '-'],
-+                        input=flatten(ROOT / name), text=True, capture_output=True, check=True).stdout
++                        input=flatten(ROOT / name), text=True, capture_output=True)
++                    self.assertEqual(completed.returncode, 0, completed.stderr)
++                    result = completed.stdout
 +                    # Strip strings so diagnostic messages are not API identifiers.
 +                    code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '', result)
 +                    self.assertFalse(re.findall(r'\bMTL4\w*\b', code))

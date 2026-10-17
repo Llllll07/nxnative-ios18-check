@@ -7,7 +7,7 @@
   "dm/ios/tools/build_ipa.sh": "c1755250b33f5f43ee30e0e11949efa7e8cfcc834854c54475df903cdefec33b",
   "dm/gfx/nvn/nvn_m3_ranges.h": "5303a02e6033a8132b5568b67f4657e29bdefc56121764a77fda29ad5367d2f8",
   "dm/gfx/tests/t_m3_ranges.c": "4fbc820b525b7573f75c224adc94702e5e4dd84dea7d6cc62012e1e01d713542",
-  "dm/ios/tests/test_ios18_port.py": "4385b4ac7ab5300c869918b7875678c6b13f232b01ad0461ceee7956bb561bf1",
+  "dm/ios/tests/test_ios18_port.py": "22008446e3f96e0fc3c412db9f9c444333d2f68dd2caf6001112689b90f94e16",
   "dm/ios/tools/check_m3_apple.sh": "865d59a2802d28eb60f99d42b7389b11f4514444ebd3603662bdbd8b8b24f31c",
   "dm/ios/tools/project_m3.py": "c936c97938e239847f9638d5e676e46564e976cadc5517a7bc680831914e21f1",
   "docs/ios18-experimental.md": "86272f10e4a02a255eba9cb1126774d6ddd7d737c28474710dfb556711df3b61"
