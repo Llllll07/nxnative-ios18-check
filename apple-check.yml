@@ -1,0 +1,44 @@
+name: iOS 18 source checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apple-check.yml', 'ci/**', 'patches/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-source-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apple-sdk:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+      RESULTS_DIR: ${{ github.workspace }}/results
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Restore the fixed upstream source and verify the supplied patch
+        run: python3 ci/prepare_sources.py --dest "$RUNNER_TEMP/nxnative-ios18-source"
+      - name: Ensure the Apple Metal compiler is available
+        run: |
+          if ! xcrun --sdk iphoneos --find metal; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+      - name: Check iOS 18 APIs and a source-only Metal library
+        run: python3 ci/apple_check.py --source "$RUNNER_TEMP/nxnative-ios18-source" --results "$RESULTS_DIR"
+      - name: Save compilation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios18-source-check-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 3
+

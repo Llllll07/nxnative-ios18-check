@@ -1,0 +1,14 @@
+{
+  "README.md": "0af31f045e12b46e6a75b586d8065176874912596be59629a0340dff6526c20d",
+  "dm/gfx/nvn/nvn_mtl.m": "00355d1c080423521eb319a0d865469aa31ba18aa2fd84e9ae51a0ba9b535b87",
+  "dm/gfx/nvn/nvn_rtex.inc": "4d5cbd95f714238e237f1752821c09fc94ea35f879f4fd8b2be043278ccad97a",
+  "dm/gfx/tex/nvn_deswizzle_gpu.h": "e15bed5cd5b55092fff2c87da9e2d92f30d1c03cf86ed36cbd99cc2f332071a9",
+  "dm/gfx/tex/nvn_deswizzle_gpu.m": "c1de5d71322eb62be8894ff67e029035f5992527501caa8e6f90c68406f11abd",
+  "dm/ios/tools/build_ipa.sh": "c1755250b33f5f43ee30e0e11949efa7e8cfcc834854c54475df903cdefec33b",
+  "dm/gfx/nvn/nvn_m3_ranges.h": "5303a02e6033a8132b5568b67f4657e29bdefc56121764a77fda29ad5367d2f8",
+  "dm/gfx/tests/t_m3_ranges.c": "4fbc820b525b7573f75c224adc94702e5e4dd84dea7d6cc62012e1e01d713542",
+  "dm/ios/tests/test_ios18_port.py": "4385b4ac7ab5300c869918b7875678c6b13f232b01ad0461ceee7956bb561bf1",
+  "dm/ios/tools/check_m3_apple.sh": "865d59a2802d28eb60f99d42b7389b11f4514444ebd3603662bdbd8b8b24f31c",
+  "dm/ios/tools/project_m3.py": "c936c97938e239847f9638d5e676e46564e976cadc5517a7bc680831914e21f1",
+  "docs/ios18-experimental.md": "86272f10e4a02a255eba9cb1126774d6ddd7d737c28474710dfb556711df3b61"
+}

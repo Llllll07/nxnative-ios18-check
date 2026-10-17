@@ -1,0 +1,9 @@
+results/
+.build/
+__pycache__/
+*.pyc
+*.keys
+*.nsp
+*.nca
+*.ipa
+
