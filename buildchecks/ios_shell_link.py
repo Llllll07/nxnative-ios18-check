@@ -9,8 +9,9 @@ from pathlib import Path
 
 TITLE='01002B9012E28000'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Heap capacity is a second-boot diagnostic adjustment, not a validated layout.
+# Heap capacity is a third-boot diagnostic adjustment, not a validated layout.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
+# The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
 title_id\t01002B9012E28000
 program_id\t01002B9012E28000
@@ -23,8 +24,8 @@ shader_versions\tv65536
 modules\tmain subsdk0 subsdk1 sdk
 romfs_marker\tLINKIDX_000.BIN
 zip_store\t.BIN:.metallib
-mem_reserve\t0x180000000
-mem_alias\t0x90000000
+mem_reserve\t0x140000000
+mem_alias\t0x50000000
 mem_stack\t0x10000000
 app_pool\t0xCD500000
 device_api\t55.15
@@ -45,7 +46,13 @@ def prepare(source):
     # This cache name deliberately accepts no existing candidate or production
     # shader libraries. A later validated shader-chain build is a separate task.
     (gd/'dmsh_chain.h').write_text('#define DMSH_CHAIN "dw9e-boot-unbuilt"\n',encoding='utf-8')
-    (gd/'PROFILE_STATUS.txt').write_text('Second-boot diagnostic only: 6 GiB virtual reservation, 2.25 GiB alias, 3.25 GiB heap capacity. The measured first-boot request is 0xC9400000. This layout and device API remain unvalidated. No shaders or game content.\n',encoding='utf-8')
+    (gd/'PROFILE_STATUS.txt').write_text('Third-boot diagnostic only: 5 GiB virtual reservation, 1.25 GiB alias, 3.25 GiB heap capacity. The measured first-boot request is 0xC9400000; the second boot failed to reserve 6 GiB. Alias demand and device API remain unvalidated. No shaders or game content.\n',encoding='utf-8')
+    svc=source/'dm/host/hle_svc.c'
+    old='if (g_as == MAP_FAILED) die("reserve guest AS");'
+    new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
+    code=svc.read_text(encoding='utf-8')
+    if code.count(old)!=1:raise ValueError('Unexpected guest reservation diagnostic shape')
+    svc.write_text(code.replace(old,new),encoding='utf-8')
     spec=importlib.util.spec_from_file_location('project_m3',source/'dm/ios/tools/project_m3.py')
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     text=mod.transform((source/'dm/ios/project.yml').read_text(encoding='utf-8'))
