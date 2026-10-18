@@ -8,9 +8,9 @@ import argparse,importlib.util,json,os,platform,shutil,subprocess,sys,time,zipfi
 from pathlib import Path
 
 TITLE='01002B9012E28000'
-RUNTIME_CHAIN='5ef94baf3abd'
+RUNTIME_CHAIN='6e5dcfec679d'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Sixth boot: enable the locally generated partial startup shader chain.
+# Seventh boot: enable the locally generated broader shader chain.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
