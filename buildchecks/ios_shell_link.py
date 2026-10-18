@@ -9,7 +9,7 @@ from pathlib import Path
 
 TITLE='01002B9012E28000'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Fourth boot: report the same module footprint that SetHeapSize validates.
+# Fifth boot: handle save-existence queries with an explicit application ID.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -67,6 +67,33 @@ def patch_memory_accounting(source):
         text=text.replace(old,new)
     svc.write_text(text,encoding='utf-8')
 
+def patch_save_queries(source):
+    """Keep application-qualified save queries within the local save model."""
+    fs=source/'dm/host/hle_fs.c'
+    text=fs.read_text(encoding='utf-8')
+    anchor='HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "fsp-srv；存档恒已建（返回 bool）", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return 1; }'
+    addition=r'''
+// The host models one local application's save. Other application IDs have no
+// mounted save here; reporting the current save for them would trigger an
+// incorrect cross-title import. The bool/output-bool ABI is confirmed in SDK
+// 10.9 and the observed full-resource startup reaches the application overload.
+static unsigned save_exists_application(uint64_t application, const void *uid) {
+    unsigned found = (!application || application == DM_GAME_PROGRAM_ID) ? h_fs_SaveExists(uid) : 0;
+    if (g_flag.fs) LOG("fs save-exists application=%#llx current=%#llx -> %u", (unsigned long long)application, (unsigned long long)DM_GAME_PROGRAM_ID, found);
+    return found;
+}
+HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "fsp-srv；按应用编号查询本地存档", unsigned, h_fs_SaveExistsApplication, uint64_t application, const void *uid) {
+    return save_exists_application(application, uid);
+}
+HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingEPbNS_13ApplicationIdERKNS_7account3UidE", "fsp-srv；本地存档存在状态输出", Result, h_fs_SaveExistsApplicationOut, uint8_t *out, uint64_t application, const void *uid) {
+    if (!out) return 0x2EE202u;  // Same null-output error as this SDK's query.
+    *out = (uint8_t)save_exists_application(application, uid);
+    return RES_OK;
+}
+'''
+    if text.count(anchor)!=1:raise ValueError('Save existence source anchor changed')
+    fs.write_text(text.replace(anchor,anchor+addition),encoding='utf-8')
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -74,8 +101,9 @@ def prepare(source):
     # This cache name deliberately accepts no existing candidate or production
     # shader libraries. A later validated shader-chain build is a separate task.
     (gd/'dmsh_chain.h').write_text('#define DMSH_CHAIN "dw9e-boot-unbuilt"\n',encoding='utf-8')
-    (gd/'PROFILE_STATUS.txt').write_text('Fourth-boot diagnostic: retain the third boot\'s successful 5 GiB reservation and 1.25 GiB alias region. Query used memory from the same image_bytes() value enforced by SetHeapSize. Existing profiles retain legacy accounting unless they opt in. SDK completion, alias demand and device API remain unvalidated. No shaders or game content.\n',encoding='utf-8')
+    (gd/'PROFILE_STATUS.txt').write_text('Fifth-boot diagnostic: retain v4 memory accounting and address layout. Add application-qualified save existence overloads, using the current local save model and reporting other application saves absent. This asset-free build does not validate game compatibility, graphics or the new interface on a phone. No shaders or game content.\n',encoding='utf-8')
     patch_memory_accounting(source)
+    patch_save_queries(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
