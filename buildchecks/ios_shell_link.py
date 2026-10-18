@@ -8,9 +8,9 @@ import argparse,importlib.util,json,os,platform,shutil,subprocess,sys,time,zipfi
 from pathlib import Path
 
 TITLE='01002B9012E28000'
-RUNTIME_CHAIN='6e5dcfec679d'
+RUNTIME_CHAIN='a75bee0c7b1d'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Seventh boot: enable the locally generated broader shader chain.
+# Ninth boot: use the locally generated NEAR_IS_ZERO shader chain.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -138,6 +138,21 @@ static void bind_program_stages(const prog_t *p, int stages) {
     if text.count(anchor)!=1:raise ValueError('Program state reset anchor changed')
     path.write_text(text.replace(anchor,addition+anchor),encoding='utf-8')
 
+def patch_depth_diagnostics(source):
+    """Log the actual clear/range values for the bounded diagnostic frames."""
+    path=source/'dm/gfx/nvn/nvn_mtl.m'
+    text=path.read_text(encoding='utf-8')
+    changes=[
+      ('                const p_clear_ds *c = a;\n                if (g_rt_merged) rp_end();',
+       '                const p_clear_ds *c = a;\n                PD("H depth-clear=%g depth-mask=%d stencil=%d stencil-mask=%#x", c->depth, c->depth_mask, c->stencil, c->stencil_mask);\n                if (g_rt_merged) rp_end();'),
+      ('      enc_r_viewport(en, v); }',
+       '      PD("H viewport-depth=%g..%g", v.znear, v.zfar);\n      enc_r_viewport(en, v); }'),
+    ]
+    for old,new in changes:
+      if text.count(old)!=1:raise ValueError('Depth diagnostic source anchor changed')
+      text=text.replace(old,new)
+    path.write_text(text,encoding='utf-8')
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -152,6 +167,7 @@ def prepare(source):
     patch_save_queries(source)
     patch_image_registration(source)
     patch_program_stage_binding(source)
+    patch_depth_diagnostics(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
