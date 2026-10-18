@@ -104,6 +104,40 @@ def patch_image_registration(source):
     if text.count(anchor)!=1:raise ValueError('Texture pool registration source anchor changed')
     nvn.write_text(text.replace(anchor,anchor+addition),encoding='utf-8')
 
+def patch_program_stage_binding(source):
+    """Keep compute bindings independent from the graphics stage composition."""
+    path=source/'dm/gfx/nvn/nvn_mtl.m'
+    text=path.read_text(encoding='utf-8')
+    changes=[
+        ('    const prog_t *prog;', '    const prog_t *prog;\n    const prog_t *cprog;  // Compute binding is independent of graphics bindings.'),
+        ('    if (stages & 0x20) return p;   // compute: replaced as a whole as before\n', ''),
+        ('        case OP_BIND_PROGRAM: { const p_bind_program *bp_ = a; const prog_t *np = bind_stages(bp_->prog, bp_->stages); if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }',
+         '        case OP_BIND_PROGRAM: { const p_bind_program *bp_ = a; bind_program_stages(bp_->prog, bp_->stages); break; }'),
+        ('    if (!S.prog) { RED_ONCE(27, "派发前没有绑定程序"); return; }\n    NvShader *cs = prog_get(S.prog)->sh[5];',
+         '    if (!S.cprog) { RED_ONCE(27, "派发前没有绑定计算程序"); return; }\n    NvShader *cs = prog_get(S.cprog)->sh[5];'),
+    ]
+    for old,new in changes:
+        if text.count(old)!=1:raise ValueError('Program binding source anchor changed: '+old[:80])
+        text=text.replace(old,new)
+    anchor='static void state_reset(void) {'
+    addition=r'''// NVN stage masks update only the named stages. In particular, unbinding
+// compute must not erase a vertex/fragment program before a subsequent draw.
+static void bind_program_stages(const prog_t *p, int stages) {
+    if (stages & 0x20) { S.cprog = p; args_dirty_all(); }
+    if (stages & 0x1f) {
+        const prog_t *np = bind_stages(p, stages & 0x1f);
+        if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); }
+    }
+    static int diag = -1; static unsigned count;
+    if (diag < 0) diag = getenv("DM_NVN_BINDLOG") != NULL;
+    if (diag && count++ < 96)
+        MLOG("[bind] mask=%#x source=%p graphics=%p compute=%p vertex=%p fragment=%p", stages, p, S.prog, S.cprog, S.bst[0], S.bst[1]);
+    PD("G mask=%#x source=%p graphics=%p compute=%p vertex=%p fragment=%p", stages, p, S.prog, S.cprog, S.bst[0], S.bst[1]);
+}
+'''
+    if text.count(anchor)!=1:raise ValueError('Program state reset anchor changed')
+    path.write_text(text.replace(anchor,addition+anchor),encoding='utf-8')
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -117,6 +151,7 @@ def prepare(source):
     patch_memory_accounting(source)
     patch_save_queries(source)
     patch_image_registration(source)
+    patch_program_stage_binding(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
