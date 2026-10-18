@@ -9,7 +9,7 @@ from pathlib import Path
 
 TITLE='01002B9012E28000'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Heap capacity is a third-boot diagnostic adjustment, not a validated layout.
+# Fourth boot: report the same module footprint that SetHeapSize validates.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -28,6 +28,7 @@ mem_reserve\t0x140000000
 mem_alias\t0x50000000
 mem_stack\t0x10000000
 app_pool\t0xCD500000
+mem_account_images\t1
 device_api\t55.15
 pad_layout\tfull
 nvn_tex_base\t0x20
@@ -39,6 +40,33 @@ nvn_ssbo_bases\tvs=0x110 ps=0x510 cs=0x310 gs=0x410
 shader_note\tBOOT DIAGNOSTIC ONLY; no shader cache was built for this profile
 '''
 
+def patch_memory_accounting(source):
+    """Opt this draft title into internally consistent image accounting."""
+    profile=source/'dm/games/game.py'
+    text=profile.read_text(encoding='utf-8')
+    anchor='    L = ['
+    insert='    account_images = int(g.get("mem_account_images", "0"), 0)\n    if account_images not in (0, 1): raise ValueError("mem_account_images must be 0 or 1")\n'
+    if text.count(anchor)!=1:raise ValueError('Profile generator anchor changed')
+    text=text.replace(anchor,insert+anchor)
+    anchor="         f'#define DM_GAME_APP_POOL {g.int(\"app_pool\"):#x}ull',"
+    if text.count(anchor)!=1:raise ValueError('Profile memory header anchor changed')
+    text=text.replace(anchor,anchor+"\n         f'#define DM_GAME_MEM_ACCOUNT_IMAGES {account_images}',")
+    profile.write_text(text,encoding='utf-8')
+    svc=source/'dm/host/hle_svc.c'
+    text=svc.read_text(encoding='utf-8')
+    changes=[
+        ('v = g_heap_cur + 0x4000000 + big_bss_bytes(); break;',
+         'v = g_heap_cur + (DM_GAME_MEM_ACCOUNT_IMAGES ? image_bytes() : 0x4000000 + big_bss_bytes()); if (g_flag.svc) LOG("GetInfo used-memory id=%llu heap=%#zx image=%#zx value=%#llx", (unsigned long long)id, g_heap_cur, image_bytes(), (unsigned long long)v); break;'),
+        ('if (size + image_bytes() > APP_POOL) { regs[0] = 0x10801; return 0; }',
+         'if (size + image_bytes() > APP_POOL) { LOG("【红】SetHeapSize pool limit: req %#zx + image %#zx > pool %#llx", size, image_bytes(), (unsigned long long)APP_POOL); regs[0] = 0x10801; return 0; }'),
+        ('        g_heap_cur = size;',
+         '        if (rc) { LOG("【红】SetHeapSize mprotect failed: req %#zx errno=%d (%s)", size, errno, strerror(errno)); regs[0] = 0xD401; return 0; }\n        g_heap_cur = size;'),
+    ]
+    for old,new in changes:
+        if text.count(old)!=1:raise ValueError('Memory accounting source anchor changed: '+old)
+        text=text.replace(old,new)
+    svc.write_text(text,encoding='utf-8')
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -46,7 +74,8 @@ def prepare(source):
     # This cache name deliberately accepts no existing candidate or production
     # shader libraries. A later validated shader-chain build is a separate task.
     (gd/'dmsh_chain.h').write_text('#define DMSH_CHAIN "dw9e-boot-unbuilt"\n',encoding='utf-8')
-    (gd/'PROFILE_STATUS.txt').write_text('Third-boot diagnostic only: 5 GiB virtual reservation, 1.25 GiB alias, 3.25 GiB heap capacity. The measured first-boot request is 0xC9400000; the second boot failed to reserve 6 GiB. Alias demand and device API remain unvalidated. No shaders or game content.\n',encoding='utf-8')
+    (gd/'PROFILE_STATUS.txt').write_text('Fourth-boot diagnostic: retain the third boot\'s successful 5 GiB reservation and 1.25 GiB alias region. Query used memory from the same image_bytes() value enforced by SetHeapSize. Existing profiles retain legacy accounting unless they opt in. SDK completion, alias demand and device API remain unvalidated. No shaders or game content.\n',encoding='utf-8')
+    patch_memory_accounting(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
