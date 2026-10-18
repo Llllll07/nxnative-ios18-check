@@ -1,0 +1,47 @@
+name: iOS 18 full host link check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/ios-shell-check.yml', 'buildchecks/ios_shell_link.py']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-shell-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-host:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Select Xcode and install project generator
+        run: |
+          if [ -d /Applications/Xcode_16.4.app/Contents/Developer ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          fi
+          if ! command -v xcodegen; then brew install xcodegen; fi
+          xcodebuild -version
+      - name: Restore only public fixed sources
+        run: python3 ci/prepare_sources.py --dest "$RUNNER_TEMP/nxnative-shell-source"
+      - name: Link the unsigned iOS 18 asset-free host
+        run: python3 buildchecks/ios_shell_link.py --source "$RUNNER_TEMP/nxnative-shell-source" --results "$RUNNER_TEMP/ios-shell-results"
+      - name: Save build log and asset-free shell
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios18-full-host-check-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ios-shell-results/*.log
+            ${{ runner.temp }}/ios-shell-results/*.json
+            ${{ runner.temp }}/ios-shell-results/*.zip
+          if-no-files-found: warn
+          retention-days: 3
