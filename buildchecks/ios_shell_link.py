@@ -10,7 +10,7 @@ from pathlib import Path
 TITLE='01002B9012E28000'
 RUNTIME_CHAIN='a75bee0c7b1d'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Eleventh boot: start the existing memory sampler after env.txt loads.
+# Twelfth boot: bound upload scratch and retire it on upload completion.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -256,6 +256,51 @@ def patch_memstat_startup(source):
     path.write_text(text.replace(anchor,new+anchor),encoding='utf-8')
 
 
+
+def patch_bounded_uploads(source):
+    """Upload staging is not a main-replay resource; use its own GPU lifetime."""
+    path=source/'dm/gfx/nvn/nvn_mtl.m';text=path.read_text(encoding='utf-8')
+    anchor='static void up_flush(void) {\n    up_owner_check("up_flush");'
+    helper=r"""
+// BEGIN UPLOAD COMPLETION RETIRE
+#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3
+static void up_retire_completed(NSMutableArray *staging) {
+    // This list owns only upload scratch buffers, never sampled textures or
+    // guest pools. Called after this upload command buffer has finished.
+    for (id<MTLResource> buffer in staging) res_remove(buffer);
+    [staging removeAllObjects];  // Do not retain buffers through a captured block.
+}
+#endif
+// END UPLOAD COMPLETION RETIRE
+"""
+    assert text.count(anchor)==1;text=text.replace(anchor,helper+'\n'+anchor)
+    changes=[
+      ('    atomic_fetch_add(&g_up_pending, 1);\n    [FB_ON(o, cb) FB_SEL:^(FB_ARG f) {',
+       '#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3\n    NSMutableArray *staging = [[NSMutableArray alloc] initWithArray:g_up_keep];\n    if (g_up_block) [staging addObject:g_up_block];\n#endif\n    atomic_fetch_add(&g_up_pending, 1);\n    [FB_ON(o, cb) FB_SEL:^(FB_ARG f) {'),
+      ('        atomic_store(&g_up_alloc_busy[slot], 0);\n        atomic_fetch_sub(&g_up_pending, 1);',
+       '#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3\n        up_retire_completed(staging);\n#endif\n        atomic_store(&g_up_alloc_busy[slot], 0);\n        atomic_fetch_sub(&g_up_pending, 1);'),
+      ('    g_up_cb = nil; if (g_up_block) { defer_obj_release(g_up_block); g_up_block = nil; } g_up_block_off = g_up_block_size = 0;\n    for (id obj in g_up_keep) defer_obj_release(obj);',
+       '#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3\n    g_up_cb = nil; g_up_block = nil; g_up_block_off = g_up_block_size = 0;\n#else\n    g_up_cb = nil; if (g_up_block) { defer_obj_release(g_up_block); g_up_block = nil; } g_up_block_off = g_up_block_size = 0;\n    for (id obj in g_up_keep) defer_obj_release(obj);\n#endif'),
+      ('    size_t need = (n + 255u) & ~((size_t)255u);\n    if (!g_up_block || g_up_block_off + need > g_up_block_size) {',
+       '    size_t need = (n + 255u) & ~((size_t)255u);\n#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3\n    if (g_up_block && g_up_block_off + need > g_up_block_size) {\n        // Finish and submit this upload before allocating the next block.\n        // The three existing upload slots bound outstanding GPU batches.\n        up_flush(); up_begin();\n    }\n#endif\n    if (!g_up_block || g_up_block_off + need > g_up_block_size) {'),
+    ]
+    for old,new in changes:
+        if text.count(old)!=1:raise ValueError('Upload source anchor changed: '+old[:90])
+        text=text.replace(old,new)
+    # Bounded creation evidence distinguishes persistent texture growth from
+    # transient staging at the failing scene without recording resource bytes.
+    anchor='    res_add(mt);   // Both first upload and re-upload register residency here'
+    addition="""#if defined(DM_BOUNDED_UPLOADS) && DM_BOUNDED_UPLOADS && DM_NVN_M3
+    if (mt.allocatedSize >= (8u << 20)) { static unsigned large; if (large++ < 96)
+        MLOG("[upload-alloc] texture ser=%llu %ux%ux%u levels=%u nvn_fmt=%#x bytes=%llu metal_total_mb=%llu",
+            (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format,
+            (unsigned long long)mt.allocatedSize, (unsigned long long)(g_dev.currentAllocatedSize >> 20)); }
+#endif
+"""
+    assert text.count(anchor)==1;text=text.replace(anchor,addition+anchor)
+    path.write_text(text,encoding='utf-8')
+
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -273,6 +318,7 @@ def prepare(source):
     patch_depth_diagnostics(source)
     patch_submission_serialization(source)
     patch_memstat_startup(source)
+    patch_bounded_uploads(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
@@ -283,7 +329,7 @@ def prepare(source):
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     text=mod.transform((source/'dm/ios/project.yml').read_text(encoding='utf-8'))
     if text.count('-DDM_NVN_M3=1')!=1:raise ValueError('Unexpected legacy project shape')
-    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1 -DDM_SERIAL_REPLAY=1 -DDM_MEMSTAT_AFTER_ENV=1')
+    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1 -DDM_SERIAL_REPLAY=1 -DDM_MEMSTAT_AFTER_ENV=1 -DDM_BOUNDED_UPLOADS=1')
     path=source/'dm/ios/project_shell_check.yml'
     if path.exists():raise ValueError('Project spec already exists')
     path.write_text(text,encoding='utf-8')
@@ -404,6 +450,99 @@ int main(int argc, char **argv) {
     return report
 
 
+
+def validate_bounded_uploads(source,results):
+    text=(source/'dm/gfx/nvn/nvn_mtl.m').read_text(encoding='utf-8')
+    alloc='static id<MTLBuffer> up_alloc('+text.split('static id<MTLBuffer> up_alloc(',1)[1].split('\n}\n',1)[0]+'\n}\n'
+    retire=text.split('// BEGIN UPLOAD COMPLETION RETIRE\n',1)[1].split('// END UPLOAD COMPLETION RETIRE',1)[0]
+    old=alloc.replace('up_alloc(', 'old_up_alloc(',1)
+    start=old.index('#if defined(DM_BOUNDED_UPLOADS)');end=old.index('#endif',start)+len('#endif')
+    old=old[:start]+old[end:]
+    code=r"""
+#import <Foundation/Foundation.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#define DM_BOUNDED_UPLOADS 1
+#define DM_NVN_M3 1
+#define MTLResourceStorageModePrivate 0
+#define UP_BLOCK_SIZE (32u*1024u*1024u)
+#define CHECK(x) do { if (!(x)) { fprintf(stderr,"check failed: %s line %d\n",#x,__LINE__); exit(72); } } while(0)
+#define MDIE(...) do { fprintf(stderr,__VA_ARGS__); exit(73); } while(0)
+@protocol MTLResource <NSObject> @end
+@protocol MTLBuffer <MTLResource>
+@property(readonly) NSUInteger length;
+@end
+static uint64_t live_bytes,peak_bytes;static unsigned removed,flushes;
+@interface FakeBuffer : NSObject<MTLBuffer>
+@property NSUInteger length;
+@end
+@implementation FakeBuffer
+- (void)dealloc { live_bytes-=self.length; }
+@end
+@interface FakeDevice : NSObject
+- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(NSUInteger)o;
+@end
+@implementation FakeDevice
+- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(NSUInteger)o {
+    (void)o;FakeBuffer *b=[FakeBuffer new];b.length=n;live_bytes+=n;if(live_bytes>peak_bytes)peak_bytes=live_bytes;return b;
+}
+@end
+static FakeDevice *g_dev;
+static id<MTLBuffer> g_up_block;
+static size_t g_up_block_size,g_up_block_off;
+static uint64_t g_up_blocks_new,g_up_swaps,g_up_swap_bytes;
+static NSHashTable *g_up_old;
+static NSMutableArray *g_up_keep,*pending;
+static NSMutableSet *registered;
+static void res_add(id<MTLResource> r) { [registered addObject:r]; }
+static void res_remove(id<MTLResource> r) { CHECK([registered containsObject:r]);[registered removeObject:r];removed++; }
+RETIRE
+static void complete_oldest(void) {
+    CHECK(pending.count>0);NSMutableArray *staging=pending[0];up_retire_completed(staging);CHECK(staging.count==0);[pending removeObjectAtIndex:0];
+}
+static void up_begin(void) { while(pending.count>=3)complete_oldest(); }
+static void up_flush(void) {
+    NSMutableArray *staging=[[NSMutableArray alloc] initWithArray:g_up_keep];
+    if(g_up_block)[staging addObject:g_up_block];
+    [pending addObject:staging];g_up_block=nil;g_up_block_off=g_up_block_size=0;[g_up_keep removeAllObjects];flushes++;
+}
+OLD
+ALLOC
+static void reset(void) {
+    while(pending.count)complete_oldest();g_up_block=nil;[g_up_keep removeAllObjects];[registered removeAllObjects];
+    CHECK(live_bytes==0);g_up_block_size=g_up_block_off=0;peak_bytes=0;flushes=removed=0;
+}
+int main(void) { @autoreleasepool {
+    g_dev=[FakeDevice new];g_up_keep=[NSMutableArray new];pending=[NSMutableArray new];registered=[NSMutableSet new];
+    size_t off;
+    for(int i=0;i<40;i++) { @autoreleasepool { id<MTLBuffer> temp=old_up_alloc(20u<<20,&off);CHECK(temp && off==0); } }
+    uint64_t old_peak=peak_bytes;CHECK(old_peak==40ull*UP_BLOCK_SIZE);CHECK(flushes==0);reset();
+    for(int i=0;i<40;i++) { @autoreleasepool { id<MTLBuffer> temp=up_alloc(20u<<20,&off);CHECK(temp && off==0);CHECK(pending.count<=3); } }
+    uint64_t new_peak=peak_bytes;CHECK(new_peak<=4ull*UP_BLOCK_SIZE);CHECK(flushes==39);
+    up_flush();while(pending.count)complete_oldest();CHECK(registered.count==0 && live_bytes==0);
+    printf("40 uploads: baseline peak=%llu MiB, bounded peak=%llu MiB; completion retirement leaves no scratch alive\n",old_peak>>20,new_peak>>20);
+    reset();
+    id<MTLBuffer> a=up_alloc(3,&off);CHECK(off==0);id<MTLBuffer>b=up_alloc(5,&off);CHECK(a==b && off==256);a=nil;b=nil;
+    @autoreleasepool { id<MTLBuffer> temp=up_alloc(128u*1024u*1024u+3u,&off);CHECK(temp && off==0 && g_up_block_size==128u*1024u*1024u+256u); }
+    up_flush();while(pending.count)complete_oldest();CHECK(live_bytes==0);
+    puts("alignment, oversized single upload, delayed GPU completion and exact-once retirement passed; this is an ARC lifetime test, not a GPU execution test");
+}return 0;}
+""".replace('RETIRE',retire).replace('OLD',old).replace('ALLOC',alloc)
+    path=results/'upload-lifetime-test.m';path.write_text(code,encoding='utf-8');exe=results/'upload-lifetime-test'
+    r=subprocess.run(['clang','-std=gnu11','-O1','-Wall','-fobjc-arc',str(path),'-framework','Foundation','-o',str(exe)],capture_output=True,text=True,timeout=60)
+    (results/'upload-lifetime-compile.log').write_text(r.stdout+r.stderr,encoding='utf-8')
+    if r.returncode:raise RuntimeError('Upload lifetime test failed to compile: '+r.stderr)
+    r=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30)
+    (results/'upload-lifetime-test.log').write_text(r.stdout+r.stderr,encoding='utf-8')
+    if r.returncode:raise RuntimeError('Upload lifetime regression: '+r.stdout+r.stderr)
+    result={'actual_up_alloc_and_retirement_helper_compiled':True,'objc_arc_lifetime_test':True,
+        'negative_control_peak_mib':1280,'bounded_peak_mib_max':128,
+        'alignment_oversize_and_delayed_completion_passed':True,'gpu_execution_test':False,'stdout':r.stdout}
+    (results/'upload-lifetime-validation.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+    return result
+
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--source',type=Path,required=True);ap.add_argument('--results',type=Path,required=True)
@@ -433,6 +572,7 @@ def main():
         for tool in ['xcodebuild','xcrun','xcodegen','make']:
             if not shutil.which(tool):raise RuntimeError('Missing tool: '+tool)
         report['submission_guard_test']=validate_submission_guard(source,results)
+        report['upload_lifetime_test']=validate_bounded_uploads(source,results)
         run(['xcodebuild','-version'],'xcode-version')
         ios=source/'dm/ios';gen=ios/'Gen';gen.mkdir()
         for name in ['dm','msl','Assets.xcassets']:(gen/name).mkdir()
