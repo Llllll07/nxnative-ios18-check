@@ -10,7 +10,7 @@ from pathlib import Path
 TITLE='01002B9012E28000'
 RUNTIME_CHAIN='a75bee0c7b1d'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Ninth boot: use the locally generated NEAR_IS_ZERO shader chain.
+# Tenth boot: retain the verified depth chain and serialize shared Metal replay.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -153,6 +153,89 @@ def patch_depth_diagnostics(source):
       text=text.replace(old,new)
     path.write_text(text,encoding='utf-8')
 
+
+def patch_submission_serialization(source):
+    """One replay owns the global command buffer, upload batch and pool at a time.
+
+    Only the experimental shell opts in; existing production profiles retain
+    their baseline behavior. Never hold this lock while waiting for presents.
+    GPU completion callbacks do not acquire it, so a replay may wait for GPU
+    fences without blocking the callback that advances them.
+    """
+    path = source/'dm/gfx/nvn/nvn_mtl.m'
+    text = path.read_text(encoding='utf-8')
+    guard = r"""
+// BEGIN SERIAL REPLAY GUARD: this block is compiled by the concurrency test.
+#if defined(DM_SERIAL_REPLAY) && DM_SERIAL_REPLAY
+static pthread_mutex_t g_replay_mu = PTHREAD_MUTEX_INITIALIZER;
+static __thread int g_replay_owned;
+static void replay_enter(void) {
+    // Reject true same-thread recursion before locking instead of deadlocking
+    // or silently allowing it to overwrite the active command buffer.
+    if (g_replay_owned) MDIE("recursive Metal replay on the submitting thread");
+    uint64_t start = now_ns();
+    int rc = pthread_mutex_trylock(&g_replay_mu), contended = rc == EBUSY;
+    if (contended) rc = pthread_mutex_lock(&g_replay_mu);
+    if (rc) MDIE("Metal replay lock failed: %d", rc);
+    g_replay_owned = 1;
+    static uint64_t submissions, waits;
+    submissions++;
+    if (contended) {
+        waits++;
+        if (waits <= 24 || !(waits % 300))
+            MLOG("[submit-serial] submit=%llu waits=%llu wait_ms=%.3f thread=%#llx",
+                (unsigned long long)submissions, (unsigned long long)waits,
+                (now_ns() - start) / 1e6, (unsigned long long)(uintptr_t)pthread_self());
+    }
+    if (submissions == 1) MLOG("[submit-serial] shared Metal replay serialization enabled");
+}
+static void replay_require_owner(void) {
+    if (!g_replay_owned) MDIE("Metal replay commit without owning its state");
+}
+static void replay_leave(void) {
+    replay_require_owner();
+    g_replay_owned = 0;
+    int rc = pthread_mutex_unlock(&g_replay_mu);
+    if (rc) MDIE("Metal replay unlock failed: %d", rc);
+}
+#else
+static void replay_enter(void) {}
+static void replay_require_owner(void) {}
+static void replay_leave(void) {}
+#endif
+// END SERIAL REPLAY GUARD
+"""
+    anchor = 'static pthread_t g_sub_thread; static _Atomic int g_sub_thread_set;'
+    assert text.count(anchor) == 1
+    text = text.replace(anchor, guard + '\n' + anchor)
+    changes = [
+        ('static int on_sub_thread(void) { return atomic_load(&g_sub_thread_set) && pthread_equal(pthread_self(), g_sub_thread); }',
+         'static int on_sub_thread(void) {\n#if defined(DM_SERIAL_REPLAY) && DM_SERIAL_REPLAY\n    return g_replay_owned;\n#else\n    return atomic_load(&g_sub_thread_set) && pthread_equal(pthread_self(), g_sub_thread);\n#endif\n}'),
+        ('void mtl_sub_begin(void) {\n    mtl_init();',
+         'void mtl_sub_begin(void) {\n    replay_enter();\n    mtl_init();'),
+        ('uint64_t mtl_sub_commit(void) {\n    defer_fallback();',
+         'uint64_t mtl_sub_commit(void) {\n    replay_require_owner();\n    defer_fallback();'),
+        ('    objc_autoreleasePoolPop(g_sub_pool); g_sub_pool = NULL;\n    return fence;',
+         '    objc_autoreleasePoolPop(g_sub_pool); g_sub_pool = NULL;\n#if defined(DM_SERIAL_REPLAY) && DM_SERIAL_REPLAY\n    atomic_store(&g_sub_thread_set, 0);\n#endif\n    replay_leave();\n    return fence;'),
+        ('static uint64_t g_fence;                        // Highest committed fence value (incremented exclusively by the submit thread)',
+         '#if defined(DM_SERIAL_REPLAY) && DM_SERIAL_REPLAY\nstatic _Atomic uint64_t g_fence;  // Readers include the present and guest threads.\n#else\nstatic uint64_t g_fence;\n#endif'),
+        ('    if (g_fence) mtl_wait(g_fence, UINT64_MAX);',
+         '    uint64_t fence = mtl_last_fence();\n    if (fence) mtl_wait(fence, UINT64_MAX);'),
+        ('RED_ONCE(40, "类型化缓冲槽绑的不是缓冲贴图（贴图号 %d 类型 %lu）", tid, (unsigned long)t.textureType);',
+         'RED_ONCE(40, "类型化缓冲槽绑的不是缓冲贴图（贴图号 %d 类型 %lu）", tid, (unsigned long)t.textureType);\n                static unsigned mismatches; if (mismatches++ < 32) {\n                    const treg_t *r = tid > 0 && tid < g_ntreg ? &g_treg[tid] : NULL;\n                    MLOG("[tbuf-mismatch] shader=%s stage=%d reg=%d handle=%#llx tid=%d metal_type=%lu guest_target=%d guest_fmt=%d serial=%llu", sh->key, nvn_stage, reg, (unsigned long long)S.tex[nvn_stage][reg], tid, (unsigned long)t.textureType, r ? r->t.d.target : -1, r ? r->t.d.format : -1, r ? (unsigned long long)r->t.serial : 0ull);\n                }'),
+    ]
+    for old, new in changes:
+        if text.count(old) != 1: raise ValueError('Submission source anchor changed: ' + old[:90])
+        text = text.replace(old, new)
+    path.write_text(text, encoding='utf-8')
+    path = source/'dm/gfx/nvn/hle_nvn.c'
+    text = path.read_text(encoding='utf-8')
+    old = '    ((queue_t *)q)->submits++;\n    mtl_sub_begin();'
+    assert text.count(old) == 1
+    text = text.replace(old, '    mtl_sub_begin();\n    ((queue_t *)q)->submits++;')
+    path.write_text(text, encoding='utf-8')
+
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -168,6 +251,7 @@ def prepare(source):
     patch_image_registration(source)
     patch_program_stage_binding(source)
     patch_depth_diagnostics(source)
+    patch_submission_serialization(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
@@ -178,11 +262,126 @@ def prepare(source):
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     text=mod.transform((source/'dm/ios/project.yml').read_text(encoding='utf-8'))
     if text.count('-DDM_NVN_M3=1')!=1:raise ValueError('Unexpected legacy project shape')
-    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1')
+    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1 -DDM_SERIAL_REPLAY=1')
     path=source/'dm/ios/project_shell_check.yml'
     if path.exists():raise ValueError('Project spec already exists')
     path.write_text(text,encoding='utf-8')
     return gd,path
+
+
+def validate_submission_guard(source, results, compiler=None):
+    """Compile the actual guard and stress its shared-state lifetime."""
+    text = (source/'dm/gfx/nvn/nvn_mtl.m').read_text(encoding='utf-8')
+    guard = text.split('// BEGIN SERIAL REPLAY GUARD:', 1)[1].split('\n', 1)[1].split('// END SERIAL REPLAY GUARD', 1)[0]
+    assert text.index('    replay_enter();', text.index('void mtl_sub_begin(')) < text.index('    mtl_init();', text.index('void mtl_sub_begin('))
+    commit = text.split('uint64_t mtl_sub_commit(void) {', 1)[1].split('uint64_t mtl_last_fence', 1)[0]
+    assert commit.index('g_cb = nil;') < commit.index('objc_autoreleasePoolPop') < commit.index('replay_leave();')
+    assert 'static _Atomic uint64_t g_fence;' in text
+    harness = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdatomic.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#undef assert
+#define assert(x) do { if (!(x)) { fprintf(stderr, "check failed: %s line %d\n", #x, __LINE__); exit(72); } } while (0)
+#ifdef _WIN32
+#include <windows.h>
+typedef SRWLOCK pthread_mutex_t;
+#define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
+static int pthread_mutex_trylock(pthread_mutex_t *p) { return TryAcquireSRWLockExclusive(p) ? 0 : EBUSY; }
+static int pthread_mutex_lock(pthread_mutex_t *p) { AcquireSRWLockExclusive(p); return 0; }
+static int pthread_mutex_unlock(pthread_mutex_t *p) { ReleaseSRWLockExclusive(p); return 0; }
+static uintptr_t pthread_self(void) { return GetCurrentThreadId(); }
+static uint64_t now_ns(void) { LARGE_INTEGER n, f; QueryPerformanceCounter(&n); QueryPerformanceFrequency(&f); return (uint64_t)(n.QuadPart * (1e9 / f.QuadPart)); }
+static void yield_thread(void) { SwitchToThread(); }
+#else
+#include <pthread.h>
+#include <sched.h>
+static uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000000ull + t.tv_nsec; }
+static void yield_thread(void) { sched_yield(); }
+#endif
+#define MDIE(...) do { fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); exit(73); } while (0)
+#define MLOG(...) ((void)0)
+#define DM_SERIAL_REPLAY 1
+GUARD
+static atomic_int active, overlaps, ready, go, mode;
+static int command_buffer, upload_owner, pool_owner;
+static atomic_uint_fast64_t fence;
+static void run_worker(int id) {
+    atomic_fetch_add(&ready, 1);
+    while (!atomic_load(&go)) yield_thread();
+    for (int i=0; i<4000; i++) {
+        if (atomic_load(&mode)) replay_enter();
+        if (atomic_fetch_add(&active, 1)) atomic_fetch_add(&overlaps, 1);
+        if (atomic_load(&mode)) {
+            replay_require_owner();
+            assert(!command_buffer && !upload_owner && !pool_owner);
+            command_buffer = upload_owner = pool_owner = id;
+            if (!(i % 13)) yield_thread();
+            assert(command_buffer == id && upload_owner == id && pool_owner == id);
+            command_buffer = upload_owner = pool_owner = 0;
+            atomic_fetch_add(&fence, 1);
+        } else {
+            for (int j=0;j<4;j++) yield_thread();
+        }
+        atomic_fetch_sub(&active, 1);
+        if (atomic_load(&mode)) replay_leave();
+    }
+}
+#ifdef _WIN32
+static DWORD WINAPI worker(LPVOID p) { run_worker((int)(intptr_t)p); return 0; }
+#else
+static void *worker(void *p) { run_worker((int)(intptr_t)p); return NULL; }
+#endif
+int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "recursive")) { replay_enter(); replay_enter(); return 9; }
+    if (argc > 1 && !strcmp(argv[1], "unowned")) { replay_require_owner(); return 9; }
+    for (int pass=0;pass<2;pass++) {
+        atomic_store(&ready, 0); atomic_store(&go, 0); atomic_store(&overlaps, 0); atomic_store(&mode, pass);
+#ifdef _WIN32
+        HANDLE threads[6]; for (int i=0;i<6;i++) threads[i]=CreateThread(NULL,0,worker,(void *)(intptr_t)(i+1),0,NULL);
+#else
+        pthread_t threads[6]; for (int i=0;i<6;i++) assert(!pthread_create(&threads[i],NULL,worker,(void *)(intptr_t)(i+1)));
+#endif
+        while (atomic_load(&ready)<6) yield_thread(); atomic_store(&go,1);
+        for (int i=0;i<6;i++) {
+#ifdef _WIN32
+            assert(WaitForSingleObject(threads[i],30000)==WAIT_OBJECT_0); CloseHandle(threads[i]);
+#else
+            assert(!pthread_join(threads[i],NULL));
+#endif
+        }
+        printf("%s overlaps=%d\n", pass ? "guarded" : "negative-control", atomic_load(&overlaps));
+        assert(pass ? !atomic_load(&overlaps) : atomic_load(&overlaps)>0);
+    }
+    assert(atomic_load(&fence)==24000 && !command_buffer && !upload_owner && !pool_owner);
+    puts("24000 guarded submissions preserve command-buffer, upload and pool ownership.");
+    return 0;
+}
+""".replace('GUARD', guard)
+    src=results/'submission-guard-test.c'; src.write_text(harness, encoding='utf-8')
+    exe=results/('submission-guard-test.exe' if os.name=='nt' else 'submission-guard-test')
+    argv=(compiler or ['clang'])+['-std=gnu11','-O1','-Wall','-Wextra','-pthread',str(src),'-o',str(exe)]
+    r=subprocess.run(argv, capture_output=True, text=True, timeout=90)
+    (results/'submission-guard-compile.log').write_text(r.stdout+r.stderr, encoding='utf-8')
+    if r.returncode: raise RuntimeError('Submission guard test did not compile: '+r.stderr)
+    checks=[]
+    for arg, expected in [([],0),(['recursive'],73),(['unowned'],73)]:
+        r=subprocess.run([str(exe),*arg],capture_output=True,text=True,timeout=40)
+        checks.append({'mode':arg or ['stress'],'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr})
+        if r.returncode!=expected: raise RuntimeError('Submission guard regression: '+str(checks[-1]))
+    report={'actual_guard_compiled':True,'threads':6,'guarded_submissions':24000,
+        'negative_control_reproduced_overlap':True,'guard_prevents_overlap':True,
+        'same_thread_recursion_rejected_without_deadlock':True,'unowned_commit_rejected':True,
+        'guard_covers_begin_through_autorelease_cleanup':True,'checks':checks,
+        'platform':platform.platform(),'metal_gpu_test':False}
+    (results/'submission-guard-validation.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+    return report
+
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
@@ -212,6 +411,7 @@ def main():
         if sys.platform!='darwin':raise RuntimeError('Full host linking requires the cloud macOS/Xcode runner')
         for tool in ['xcodebuild','xcrun','xcodegen','make']:
             if not shutil.which(tool):raise RuntimeError('Missing tool: '+tool)
+        report['submission_guard_test']=validate_submission_guard(source,results)
         run(['xcodebuild','-version'],'xcode-version')
         ios=source/'dm/ios';gen=ios/'Gen';gen.mkdir()
         for name in ['dm','msl','Assets.xcassets']:(gen/name).mkdir()
