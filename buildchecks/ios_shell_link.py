@@ -10,7 +10,7 @@ from pathlib import Path
 TITLE='01002B9012E28000'
 RUNTIME_CHAIN='a75bee0c7b1d'
 PROFILE='''# Draft boot-test inputs only. No runtime compatibility is asserted.
-# Tenth boot: retain the verified depth chain and serialize shared Metal replay.
+# Eleventh boot: start the existing memory sampler after env.txt loads.
 # The first device boot requested 0xC9400000; the old cap was 0x68000000.
 # The second boot could not reserve 6 GiB; retain the first boot's 5 GiB span.
 # Device API values remain inherited reference defaults, not measured.
@@ -236,6 +236,26 @@ static void replay_leave(void) {}
     path.write_text(text, encoding='utf-8')
 
 
+
+def patch_memstat_startup(source):
+    """Retry the existing sampler after the iOS env.txt has been loaded."""
+    path=source/'dm/host/memstat.m'
+    text=path.read_text(encoding='utf-8')
+    old='#include "dm.h"'
+    assert text.count(old)==1
+    text=text.replace(old,old+'\n#include <stdatomic.h>')
+    old='__attribute__((constructor)) static void memstat_start(void) {\n    const char *p = getenv("DM_MEMSTAT");\n    if (!p || !*p) return;'
+    new='__attribute__((constructor)) void dm_memstat_start(void) {\n    const char *p = getenv("DM_MEMSTAT");\n    if (!p || !*p) return;\n    static _Atomic int started;\n    if (atomic_exchange(&started, 1)) return;  // Constructor and post-env call share one sampler.'
+    assert text.count(old)==1
+    path.write_text(text.replace(old,new),encoding='utf-8')
+    path=source/'dm/ios/Sources/main.m'
+    text=path.read_text(encoding='utf-8')
+    anchor='    NSString *romfs = romfs_locate();'
+    new='#if defined(DM_MEMSTAT_AFTER_ENV) && DM_MEMSTAT_AFTER_ENV\n    extern void dm_memstat_start(void);\n    dm_memstat_start();  // Documents/env.txt is now available to the sampler.\n#endif\n'
+    assert text.count(anchor)==1
+    path.write_text(text.replace(anchor,new+anchor),encoding='utf-8')
+
+
 def prepare(source):
     gd=source/'dm/games'/TITLE
     if gd.exists():raise ValueError('Refusing to overwrite an existing title profile')
@@ -252,6 +272,7 @@ def prepare(source):
     patch_program_stage_binding(source)
     patch_depth_diagnostics(source)
     patch_submission_serialization(source)
+    patch_memstat_startup(source)
     svc=source/'dm/host/hle_svc.c'
     old='if (g_as == MAP_FAILED) die("reserve guest AS");'
     new='if (g_as == MAP_FAILED) die("reserve guest AS %#llx errno=%d (%s)", (unsigned long long)RESERVE, errno, strerror(errno));'
@@ -262,7 +283,7 @@ def prepare(source):
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     text=mod.transform((source/'dm/ios/project.yml').read_text(encoding='utf-8'))
     if text.count('-DDM_NVN_M3=1')!=1:raise ValueError('Unexpected legacy project shape')
-    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1 -DDM_SERIAL_REPLAY=1')
+    text=text.replace('-DDM_NVN_M3=1','-DDM_NVN_M3=1 -DDM_SHELL=1 -DDM_SERIAL_REPLAY=1 -DDM_MEMSTAT_AFTER_ENV=1')
     path=source/'dm/ios/project_shell_check.yml'
     if path.exists():raise ValueError('Project spec already exists')
     path.write_text(text,encoding='utf-8')
