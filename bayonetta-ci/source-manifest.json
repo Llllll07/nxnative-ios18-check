@@ -1,0 +1,107 @@
+{
+  "source_commit": "d50ecc1f8469b3697f62177a1fa0b9838cb50769",
+  "source_archive_sha256": "e83ef87f495148dae6fb27e3f875f51acc78c4db02a94f6533c6193b62472142",
+  "patch_sha256": "087d107f2a7bfe7b03d2bccdf223066e9b8d0f649f02ee368a75d99d12156251",
+  "files": [
+    {
+      "path": "dm/gfx/nvn/dmsh_chain.h",
+      "sha256": "ff527ab7fe1ac958eddf2ca2b813d5788d73cc8a526f3f6245533dfc71202de1"
+    },
+    {
+      "path": "dm/gfx/nvn/hle_nvn.c",
+      "sha256": "b027fb85cafe727b4a36e7cc4f02805e9944f55b9239f5382142f94a285a7b88"
+    },
+    {
+      "path": "dm/gfx/nvn/nvn_metal3_compat.inc",
+      "sha256": "1d386dd546bbf735f4229893ee422887950847af783fbbac81b0b80278935545"
+    },
+    {
+      "path": "dm/gfx/nvn/nvn_mtl.m",
+      "sha256": "9aec3c0e8286241d16052d2d9863121c64903664857f6ccf743603af5e9e9878"
+    },
+    {
+      "path": "dm/gfx/nvn/nvn_refl.m",
+      "sha256": "151bc97c35a72dc144101f45d7e72259a05c3a5aa414ef7eef5bf76432a1fe81"
+    },
+    {
+      "path": "dm/gfx/nvn/tests/t_metal3_cache.m",
+      "sha256": "1b41bb53890e0594c0783875315f8c88d01bfd50ccd715a85c2fb344d8907c0a"
+    },
+    {
+      "path": "dm/gfx/nvn/tests/t_metal3_vertex_fetch.m",
+      "sha256": "2dfe0843d6082deeb6572b8a469d91dfedeb7b0c3d9f490bcbee94f56a126375"
+    },
+    {
+      "path": "dm/gfx/tests/t_metal3_present_resources.m",
+      "sha256": "fd3a7fcbff7f7b8f76cd54dafb8380673e0323641e2318101c8c0d89e73d4896"
+    },
+    {
+      "path": "dm/gfx/tex/nvn_bcdec.c",
+      "sha256": "dee376d50ec36d9e0c82e16d20ee74bf9c212a29c8cb1501fb7eb3c847d91754"
+    },
+    {
+      "path": "dm/gfx/tex/nvn_bcdec.h",
+      "sha256": "532b24517939ee90fb820ee8e1e5dd11fbefa406f6485d4eb03555e5c32fb313"
+    },
+    {
+      "path": "dm/gfx/tools/metal3_vin.py",
+      "sha256": "94ffbbbe27931d0b7d49832bb1eb97d6dc304590e63d746c4d469093d4d084e8"
+    },
+    {
+      "path": "dm/host/Makefile",
+      "sha256": "d92ad3a0e4b69a6e4fa97bbabf540933b11d7d8f0dbd241fd554d63775860f4e"
+    },
+    {
+      "path": "dm/ios/project.yml",
+      "sha256": "0758c9d9c31b9ff08b7ef69af0bddf80bd3258d2af29c1b8aa91b0f309034bf6"
+    },
+    {
+      "path": "dm/ios/tools/build_ipa.sh",
+      "sha256": "070818db155d8fc404ff1907aeda342d5f199cc5d04c1160b95af57575f277c8"
+    },
+    {
+      "path": "dm/ios/tools/gen_build.py",
+      "sha256": "d7f17650b00c84efbc418bc9204011d713ae83c85996b2e3aa341ba4c4313d5c"
+    },
+    {
+      "path": "dm/ios/tools/gen_resources.py",
+      "sha256": "6a1fb3c8a8e4d5983e7ec03bbb67ed25c65d8b272a9c2bdc1bf8842eb88ead3e"
+    },
+    {
+      "path": "dm/ios/tools/stage_resources.sh",
+      "sha256": "2fb812747e255ae7974f463ef238528237603d1da82c76f79d5999d13d92d434"
+    },
+    {
+      "path": "dm/third_party/bcdec/LICENSE",
+      "sha256": "2414c782587f6e96661cb0d19d752432ddecfcc1a221b4cb12bc2253a54dc5ac"
+    },
+    {
+      "path": "dm/third_party/bcdec/README.md",
+      "sha256": "46bada2350e0ab51480a3467ec0c5bb6a62fffe5c72cd9ba020dc843d0935496"
+    },
+    {
+      "path": "dm/third_party/bcdec/bcdec.h",
+      "sha256": "134520764d96f70a27db814173616c89ad85db95fbd3328417c7a8c77e7ca189"
+    },
+    {
+      "path": "docs/agents/symptoms.md",
+      "sha256": "fc0767b44251846c9fef9738d72a1999c6f19516f2134e75f761852b8a84b05f"
+    },
+    {
+      "path": "docs/reference/nvn-objects.md",
+      "sha256": "4c3d2654a6c32cd6eda0242a5867898bc618725553737d800c80553e1ffb5ad8"
+    },
+    {
+      "path": "docs/reference/rendering.md",
+      "sha256": "44a61863665f25b458e0d11a136c6adb1da8cfbca623a2dc7e6d87ffc62cb853"
+    },
+    {
+      "path": "docs/reference/shaders.md",
+      "sha256": "d2de93a35bf65ba0ceb514ff14feb0de36b89895ed1c33103d965a2fd9dc2ab2"
+    }
+  ],
+  "game_bytes_in_patch": false,
+  "keys_in_patch": false,
+  "shader_data_in_patch": false,
+  "patch_roundtrip_exact": true
+}

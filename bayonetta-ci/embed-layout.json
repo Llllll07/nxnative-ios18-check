@@ -1,0 +1,78 @@
+{
+  "game": "010076F0049A2000",
+  "version": "1.1",
+  "modules": [
+    {
+      "name": "main",
+      "file_length": 75498380,
+      "pieces": [
+        {
+          "segment": "__TEXT",
+          "section": "__dmmainx0",
+          "start": 0,
+          "size": 10371072
+        },
+        {
+          "segment": "__DMmainW",
+          "section": "__img",
+          "start": 10371072,
+          "size": 65060864
+        },
+        {
+          "segment": "__TEXT",
+          "section": "__dmmainx1",
+          "start": 75431936,
+          "size": 81920
+        }
+      ]
+    },
+    {
+      "name": "subsdk0",
+      "file_length": 14411004,
+      "pieces": [
+        {
+          "segment": "__TEXT",
+          "section": "__dmsubsdk0x0",
+          "start": 0,
+          "size": 7618560
+        },
+        {
+          "segment": "__DMsubsdk0W",
+          "section": "__img",
+          "start": 7618560,
+          "size": 6602752
+        },
+        {
+          "segment": "__TEXT",
+          "section": "__dmsubsdk0x1",
+          "start": 14221312,
+          "size": 196608
+        }
+      ]
+    },
+    {
+      "name": "sdk",
+      "file_length": 10882976,
+      "pieces": [
+        {
+          "segment": "__TEXT",
+          "section": "__dmsdkx0",
+          "start": 0,
+          "size": 4063232
+        },
+        {
+          "segment": "__DMsdkW",
+          "section": "__img",
+          "start": 4063232,
+          "size": 6553600
+        },
+        {
+          "segment": "__TEXT",
+          "section": "__dmsdkx1",
+          "start": 10616832,
+          "size": 278528
+        }
+      ]
+    }
+  ]
+}
