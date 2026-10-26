@@ -1,0 +1,28 @@
+name: Bayonetta original font resources
+on:
+  push:
+    branches: [bayonetta-metal3-performance]
+    paths: ['.github/workflows/bayonetta-font-resources.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fonts:
+    runs-on: macos-15-intel
+    timeout-minutes: 8
+    steps:
+      - name: Prepare the original build script font sources
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/font-env"
+          "$RUNNER_TEMP/font-env/bin/python" -m pip install fonttools==4.60.1
+          curl --fail --location https://raw.githubusercontent.com/seedds/nxnative/d50ecc1f8469b3697f62177a1fa0b9838cb50769/dm/tools/make_ext_font.py --output "$RUNNER_TEMP/make_ext_font.py"
+          mkdir -p "$RUNNER_TEMP/fonts"
+          cp "/System/Library/Fonts/Supplemental/Arial Unicode.ttf" "$RUNNER_TEMP/fonts/standard.ttf"
+          "$RUNNER_TEMP/font-env/bin/python" "$RUNNER_TEMP/make_ext_font.py" "$RUNNER_TEMP/fonts/nintendo_ext.ttf"
+          shasum -a 256 "$RUNNER_TEMP/fonts/"*.ttf > "$RUNNER_TEMP/fonts/SHA256SUMS.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Bayonetta-original-font-resources
+          path: ${{ runner.temp }}/fonts/
+          retention-days: 1
