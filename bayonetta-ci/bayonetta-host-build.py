@@ -97,6 +97,17 @@ def main():
              f'SYMROOT={derived}/Build/Products', f'OBJROOT={derived}/Build/Intermediates.noindex', 'build'],
             'iphone-host-build', cwd=ios, env=env)
         app = derived / 'Build/Products/Release-iphoneos/DmIOS.app'
+        # Use the original build script's font sources, not a Windows substitute.
+        font_dir = app / 'dm/font'
+        font_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile('/System/Library/Fonts/Supplemental/Arial Unicode.ttf', font_dir / 'standard.ttf')
+        font_python = results / 'font-env'
+        run([sys.executable, '-m', 'venv', font_python], 'font-venv')
+        run([font_python / 'bin/python', '-m', 'pip', 'install', 'fonttools==4.60.1'], 'fonttools-install')
+        run([font_python / 'bin/python', source / 'dm/tools/make_ext_font.py', font_dir / 'nintendo_ext.ttf'], 'extension-font')
+        report['fonts'] = {path.name: {'bytes': path.stat().st_size,
+                                      'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                           for path in font_dir.iterdir() if path.is_file()}
         with (app / 'Info.plist').open('rb') as stream:
             info = plistlib.load(stream)
         if info.get('MinimumOSVersion') != '18.0':
